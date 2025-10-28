@@ -3,32 +3,9 @@ import { ArrowLeft, Upload, File, X, Mic, Loader } from 'lucide-react';
 
 // --- MOCK PLACEHOLDERS ---
 // Replace this with your actual import: import { transcribeAudio } from '../services/api';
-const transcribeAudio = async (file: File) => {
-    await new Promise(resolve => setTimeout(resolve, 2500));
-    const isError = file.name.toLowerCase().includes("error");
-    if (isError) {
-        throw new Error("Simulated API failure due to file name.");
-    }
-    return {
-        text: `[Transcription Result for ${file.name}]: Your audio has been successfully processed by the transcription service. The result is a high-fidelity conversion of spoken words into text, ready for review and download.`
-    };
-};
+import { transcribeAudio } from './services/api';
 // Replace this with your actual import: import TranscriptionDisplay from './TranscriptionDisplay';
-const TranscriptionDisplay = ({ text, isLoading, onClear }) => {
-    // This is a minimal mock for the UI logic below to work
-    if (!text && !isLoading) return null;
-    return (
-        <div className="bg-white rounded-lg shadow-lg p-6 max-w-4xl mx-auto mt-4">
-            <h3 className="text-lg font-semibold text-gray-800">Transcription Result</h3>
-            <div className="bg-gray-50 rounded-lg p-4 mt-2">
-                <p className="text-gray-800 leading-relaxed whitespace-pre-wrap">
-                    {isLoading ? '...' : text}
-                </p>
-            </div>
-            {/* Download/Copy/Clear buttons would go here based on your provided TranscriptionDisplay.tsx */}
-        </div>
-    );
-};
+import TranscriptionDisplay from './TranscriptionDisplay';
 // --- END MOCK PLACEHOLDERS ---
 
 // --- Type Definitions ---
