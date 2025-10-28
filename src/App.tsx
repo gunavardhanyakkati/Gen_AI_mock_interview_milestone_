@@ -1,368 +1,267 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
-import { Video, Square, Download, VideoOff, AlertCircle, Upload, Webcam } from 'lucide-react';
-import RecordRTC from 'recordrtc';
+import React, { useState, useEffect } from "react";
+// Import Home, AudioToText, and VideoToText to complete the component tree
+import Home from "./Home";
 
-type RecordingStatus = 'idle' | 'recording' | 'stopped';
-type InputMode = 'webcam' | 'upload'; // New state to track input mode
 
-function App() {
-  const [status, setStatus] = useState<RecordingStatus>('idle');
-  const [inputMode, setInputMode] = useState<InputMode>('webcam'); // Default to webcam
-  const [hasPermissions, setHasPermissions] = useState<boolean>(false);
-  const [permissionError, setPermissionError] = useState<string>('');
-  const [transcription, setTranscription] = useState<string>("");
-  // Adding state for whisper text, as the API provides it
-  const [whisperText, setWhisperText] = useState<string>(""); 
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
-  const [lastRecording, setLastRecording] = useState<Blob | null>(null); // To hold blob for download
+import { initializeApp } from "firebase/app";
 
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const recorderRef = useRef<RecordRTC | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null); // Ref for file input
+import {
+  getAuth,
+  onAuthStateChanged,
+  signOut,
+  GoogleAuthProvider,
+  User, // Import User type from firebase/auth
+} from "firebase/auth";
 
-  // --- Utility Functions ---
+import {
+  CheckCircle,
+  AlertCircle,
+  Mail,
+  Upload,
+  Video,
+  Loader,
+  Download,
+} from "lucide-react";
 
-  const stopMediaStream = useCallback(() => {
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach(track => track.stop());
-      mediaStreamRef.current = null;
-    }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
-    setHasPermissions(false);
-  }, []);
+import SignIn from './auth/SignIn';
+import SignUp from './auth/SignUp';
 
-  useEffect(() => {
-    return () => {
-      stopMediaStream();
-    };
-  }, [stopMediaStream]);
+// --- Firebase Configuration ---
+const firebaseConfig = {
+  apiKey: "AIzaSyCxx3cuoG1wFNcEoYP4iLVjeeJVwDrCkC8",
+  authDomain: "genai-mock-interview-auth.firebaseapp.com",
+  projectId: "genai-mock-interview-auth",
+  storageBucket: "genai-mock-interview-auth.firebasestorage.app",
+  messagingSenderId: "711293444002",
+  appId: "1:711293444002:web:15e233e1dbc1f1349adcfb",
+  measurementId: "G-L8QN8MD2ED",
+};
 
-  const requestPermissions = async () => {
-    // ... (Existing requestPermissions logic)
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+export const auth = getAuth(app);
+export const googleProvider = new GoogleAuthProvider();
+
+googleProvider.setCustomParameters({
+  prompt: "select_account",
+});
+
+// --- Component Props Types ---
+interface EmailVerificationMessageProps {
+  user: User; // User type from firebase/auth
+}
+
+// --- Email Verification Message Component ---
+const EmailVerificationMessage: React.FC<EmailVerificationMessageProps> = ({ user }) => {
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+
+  const handleResendVerification = async () => {
+    setLoading(true);
     try {
-      setPermissionError('');
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        },
-        audio: true
-      });
-
-      mediaStreamRef.current = stream;
-      setHasPermissions(true);
-      setUploadedFile(null); // Clear uploaded file when starting webcam
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        try {
-          await videoRef.current.play();
-        } catch (error) {
-          console.error('Error playing video:', error);
-        }
-      }
+      const { sendEmailVerification } = await import("firebase/auth");
+      await sendEmailVerification(user);
+      setMessage("Verification email sent successfully!");
+      setTimeout(() => setMessage(""), 5000);
     } catch (error) {
-      console.error('Error accessing media devices:', error);
-      setPermissionError('Failed to access camera/microphone. Please grant permissions.');
-      setHasPermissions(false);
-    }
-  };
-
-  const startRecording = async () => {
-    if (!mediaStreamRef.current) {
-      await requestPermissions();
-      if (!mediaStreamRef.current) return;
-    }
-
-    // ... (Existing startRecording logic)
-    const options: RecordRTC.Options = {
-      type: 'video',
-      mimeType: 'video/webm',
-      disableLogs: false
-    };
-
-    recorderRef.current = new RecordRTC(mediaStreamRef.current, options);
-    recorderRef.current.startRecording();
-    setStatus('recording');
-    setTranscription(""); // Clear old result
-    setWhisperText(""); // Clear old result
-    setLastRecording(null); // Clear last recording
-  };
-
-  /**
-    * Main function to send data to the backend, handles both Blob (from recording) and File (from upload)
-    * @param source The video data source (Blob or File)
-    * @param fileName The name to use for the file in the FormData
-    */
-  const processVideo = async (source: Blob | File, fileName: string) => {
-    setIsProcessing(true);
-    setTranscription(""); // Clear any previous transcription
-    setWhisperText(""); // Clear any previous transcription
-
-    try {
-      const formData = new FormData();
-      // Use 'video_file' key to match the FastAPI endpoint: predict_word(video_file: UploadFile = File(...))
-      formData.append('video_file', source, fileName);
-
-      const response = await fetch('http://localhost:8000/predict_sentence/', {
-        method: 'POST',
-        body: formData,
-      });
-
-      // ===================================================================
-      // === THE FIX IS HERE ===
-      // ===================================================================
-      
-      // 1. Read the JSON response body ONE TIME.
-      const data = await response.json();
-
-      // 2. Check if the response was NOT successful (e.g., 400 or 500 error)
-      if (!response.ok) {
-        // FastAPI sends errors in a "detail" field.
-        // Throw an error with that message.
-        throw new Error(data.detail || `Server error: ${response.status}`);
-      }
-
-      // 3. If we are here, the response was successful (200 OK).
-      // We do NOT need to call response.json() again.
-      // We use the 'data' variable we already read.
-
-      console.log("A/V Prediction:", data.model_prediction);
-      console.log("Whisper Transcription:", data.whisper_transcription);
-      
-      // Use data.model_prediction to set your transcription state
-      setTranscription(data.model_prediction);
-      setWhisperText(data.whisper_transcription); // Also set the whisper text
-
-    } catch (error) {
-      console.error('Error processing video:', error);
-      alert(`Failed to process video: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      setMessage("Failed to send verification email. Please try again.");
+      setTimeout(() => setMessage(""), 5000);
     } finally {
-      setIsProcessing(false);
+      setLoading(false);
     }
   };
 
-  const stopRecording = () => {
-    if (!recorderRef.current) return;
-
-    recorderRef.current.stopRecording(async () => {
-      const blob = recorderRef.current!.getBlob();
-      setStatus('stopped');
-      setLastRecording(blob); // Save blob for download
-
-      // Process recorded video (Blob)
-      await processVideo(blob, 'recorded_video.webm');
-
-      // downloadRecording(blob); // Optionally keep download
-      recorderRef.current = null;
-    });
-  };
-
-  // --- Upload Handlers ---
-
-  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) {
-      setUploadedFile(file);
-      setTranscription("");
-      setWhisperText("");
-      setLastRecording(null); // Clear any recording
-      // Display the uploaded video file in the video element (optional)
-      if (videoRef.current) {
-        videoRef.current.srcObject = null;
-        videoRef.current.src = URL.createObjectURL(file);
-        videoRef.current.play().catch(err => console.error('Error playing uploaded file:', err));
-      }
+  const handleSignOut = async () => {
+    try {
+      await signOut(auth);
+    } catch (error) {
+      console.error("Sign out error:", error);
     }
-  };
-
-  const handleUploadClick = () => {
-    if (uploadedFile) {
-      // Process the existing uploaded file
-      processVideo(uploadedFile, uploadedFile.name);
-    } else {
-      // Open the file dialog if no file is selected
-      fileInputRef.current?.click();
-    }
-  };
-
-  const handleModeChange = (mode: InputMode) => {
-    setInputMode(mode);
-    // Clean up previous mode
-    stopMediaStream();
-    setUploadedFile(null);
-    setStatus('idle');
-    setTranscription("");
-    setWhisperText("");
-    setLastRecording(null);
-    if (videoRef.current) videoRef.current.src = '';
-  };
-
-  // --- Rendering and UI ---
-
-  const downloadRecording = () => {
-    if (!lastRecording) return; // Use the blob from state
-
-    const url = URL.createObjectURL(lastRecording);
-    const a = document.createElement('a');
-    a.style.display = 'none';
-    a.href = url;
-    a.download = `recording-${Date.now()}.webm`;
-    document.body.appendChild(a);
-    a.click();
-
-    setTimeout(() => {
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    }, 100);
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
-      <div className="container mx-auto px-4 py-8 max-w-5xl">
-        <div className="text-center mb-12">
-          {/* ... (Header) */}
-          <div className="flex items-center justify-center gap-3 mb-4">
-            <Video className="w-10 h-10 text-blue-400" />
-            <h1 className="text-4xl font-bold tracking-tight">AV Word Classifier</h1>
+    <div className="min-h-screen bg-gradient-to-br from-yellow-50 to-orange-100 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-8 text-center">
+        <AlertCircle className="w-16 h-16 text-orange-500 mx-auto mb-4" />
+        <h1 className="text-2xl font-bold text-gray-900 mb-4">
+          Verify Your Email
+        </h1>
+        <p className="text-gray-600 mb-6">
+          We've sent a verification link to <strong>{user.email}</strong>.
+          Please check your email and click the verification link to access your
+          account.
+        </p>
+
+        {message && (
+          <div
+            className={`p-3 rounded-lg mb-4 text-sm ${
+              message.includes("successfully")
+                ? "bg-green-50 text-green-600 border border-green-200"
+                : "bg-red-50 text-red-600 border border-red-200"
+            }`}
+          >
+            {message}
           </div>
-          <p className="text-slate-400 text-lg">Process video via Webcam or File Upload</p>
+        )}
+
+        <div className="space-y-3">
+          <button
+            onClick={handleResendVerification}
+            disabled={loading}
+            className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loading ? "Sending..." : "Resend Verification Email"}
+          </button>
+
+          <button
+            onClick={handleSignOut}
+            className="w-full bg-gray-600 text-white py-3 px-4 rounded-lg font-medium hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
+          >
+            Sign Out
+          </button>
         </div>
 
-        <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl shadow-2xl border border-slate-700 overflow-hidden">
-          <div className="p-8">
-
-            {/* --- Mode Toggle --- */}
-            <div className="flex justify-center gap-4 mb-6">
-              <button
-                onClick={() => handleModeChange('webcam')}
-                className={`py-2 px-4 rounded-lg flex items-center gap-2 transition ${inputMode === 'webcam' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-                  }`}
-              >
-                <Webcam size={20} /> Use Webcam
-              </button>
-              <button
-                onClick={() => handleModeChange('upload')}
-                className={`py-2 px-4 rounded-lg flex items-center gap-2 transition ${inputMode === 'upload' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-                  }`}
-              >
-                <Upload size={20} /> Upload File
-              </button>
-            </div>
-
-            <div className="aspect-video bg-slate-900 rounded-lg overflow-hidden relative mb-4">
-              <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                muted
-                className="w-full h-full object-contain" // Use 'object-contain' for uploaded files
-                style={{ transform: inputMode === 'webcam' ? 'scaleX(-1)' : 'none' }}
-              />
-            </div>
-
-            {permissionError && (
-              <div className="p-4 bg-red-900/30 border border-red-700 rounded-lg mb-4">
-                <p className="text-red-200">{permissionError}</p>
-              </div>
-            )}
-
-            {/* Hidden File Input */}
-            <input
-              type="file"
-              ref={fileInputRef}
-              accept="video/*"
-              onChange={handleFileChange}
-              style={{ display: 'none' }}
-            />
-
-            {/* --- Action Buttons based on Mode --- */}
-            {inputMode === 'webcam' && (
-              <button
-                onClick={status === 'recording' ? stopRecording : startRecording}
-                disabled={isProcessing}
-                className={`w-full py-3 px-4 rounded-lg font-medium ${status === 'recording'
-                    ? 'bg-red-600 hover:bg-red-700'
-                    : 'bg-blue-600 hover:bg-blue-700'
-                  }`}
-              >
-                {status === 'recording' ? 'Stop Recording & Process' : 'Start Recording'}
-              </button>
-            )}
-
-            {inputMode === 'upload' && (
-              <>
-                <button
-                  onClick={handleUploadClick}
-                  disabled={isProcessing}
-                  className={`w-full py-3 px-4 rounded-lg font-medium flex items-center justify-center gap-2 ${uploadedFile
-                      ? 'bg-green-600 hover:bg-green-700'
-                      : 'bg-blue-600 hover:bg-blue-700'
-                    }`}
-                >
-                  {uploadedFile ? (
-                    <>
-                      <Upload size={20} /> Process Uploaded File
-                    </>
-                  ) : (
-                    <>
-                      <Upload size={20} /> Select Video File
-                    </>
-                  )}
-                </button>
-                {uploadedFile && (
-                  <p className="text-center text-slate-400 mt-2">File ready to process: {uploadedFile.name}</p>
-                )}
-              </>
-            )}
-
-            {/* --- Processing & Transcription Display --- */}
-            {isProcessing && (
-              <div className="mt-4 p-4 bg-blue-900/30 border border-blue-700 rounded-lg flex items-center justify-center gap-3">
-                <div className="animate-spin rounded-full h-5 w-5 border-2 border-blue-400 border-t-transparent" />
-                <p className="text-blue-200">Processing video...</p>
-              </div>
-            )}
-
-            {/* Updated to show both results */}
-            {(transcription || whisperText) && !isProcessing && (
-              <div className="mt-4 space-y-4">
-                <div className="p-4 bg-slate-700/50 border border-slate-600 rounded-lg">
-                  <h3 className="text-lg font-semibold mb-2">A/V Model Prediction:</h3>
-                  <p className="text-green-300 font-bold text-2xl">{transcription || "..."}</p>
-                </div>
-
-               <div className="p-4 bg-slate-700/50 border border-slate-600 rounded-lg">
-                  <h3 className="text-lg font-semibold mb-2">Whisper Transcription:</h3>
-                  <p className="text-blue-300 text-xl">{whisperText || "..."}</p>
-                </div>
-
-                {/* Download option only makes sense for recorded videos */}
-                {inputMode === 'webcam' && status === 'stopped' && lastRecording && (
-                  <button
-                    onClick={downloadRecording}
-                    className="w-full py-3 px-4 rounded-lg font-medium bg-green-600 hover:bg-green-700"
-                  >
-                    <Download size={20} className="inline-block mr-2" />
-                    Download Recording
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="mt-8 text-center text-slate-500 text-sm">
-          <p>Built with WebRTC & RecordRTC.js, powered by FastAPI & PyTorch.</p>
+        <div className="mt-6 text-xs text-gray-500">
+          <p>
+            Didn't receive the email? Check your spam folder or try resending.
+          </p>
         </div>
       </div>
     </div>
   );
-}
+};
+
+// --- Loading Screen Component ---
+const LoadingScreen: React.FC = () => {
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
+      <div className="text-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+        <p className="text-gray-600">Loading your account...</p>
+      </div>
+    </div>
+  );
+};
+
+// --- Configuration Error Component ---
+const ConfigurationError: React.FC = () => {
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-red-50 to-red-100 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-8 text-center">
+        <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
+        <h1 className="text-2xl font-bold text-gray-900 mb-4">
+          Firebase Configuration Required
+        </h1>
+        <p className="text-gray-600 mb-6">
+          Please replace the placeholder Firebase configuration in App.tsx with
+          your actual Firebase project configuration.
+        </p>
+        <div className="bg-gray-100 p-4 rounded-lg text-left">
+          <p className="text-sm text-gray-700 mb-2 font-medium">Setup Steps:</p>
+          <ol className="text-sm text-gray-600 space-y-1 list-decimal list-inside">
+            <li>Create a Firebase project</li>
+            <li>Enable Email/Password Authentication</li>
+            <li>Get your web app configuration</li>
+            <li>Replace the firebaseConfig object in App.tsx</li>
+          </ol>
+        </div>
+        <div className="mt-4">
+          <a
+            href="https://console.firebase.google.com/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 hover:text-blue-700 text-sm"
+          >
+            Go to Firebase Console →
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// --- Main App Component ---
+const App: React.FC = () => {
+  // Define type for authentication view
+  type AuthView = "signin" | "signup";
+  
+  // State for view, user (can be firebase User or null), loading, and initialization
+  const [currentView, setCurrentView] = useState<AuthView>("signin");
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [authInitialized, setAuthInitialized] = useState(false);
+
+  useEffect(() => {
+    // Check if Firebase is properly configured
+    if (!firebaseConfig.apiKey || firebaseConfig.apiKey === "your-api-key") {
+      setLoading(false);
+      return;
+    }
+
+    // Set up auth state listener for persistent login
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setUser(user);
+      setLoading(false);
+      setAuthInitialized(true);
+    });
+
+    // Cleanup subscription on unmount
+    return () => unsubscribe();
+  }, []);
+
+  const handleSignOut = async () => {
+    try {
+      await signOut(auth);
+      setCurrentView("signin");
+    } catch (error) {
+      console.error("Sign out error:", error);
+    }
+  };
+
+  const handleSwitchToSignUp = () => {
+    setCurrentView("signup");
+  };
+
+  const handleSwitchToSignIn = () => {
+    setCurrentView("signin");
+  };
+
+  // Show configuration error if Firebase is not set up
+  if (
+    !loading &&
+    (!firebaseConfig.apiKey || firebaseConfig.apiKey === "your-api-key")
+  ) {
+    return <ConfigurationError />;
+  }
+
+  // Show loading screen while checking auth state
+  if (loading || !authInitialized) {
+    return <LoadingScreen />;
+  }
+
+  // If user is logged in
+  if (user) {
+    // Google users don't need email verification, regular email users do
+    const isGoogleUser = user.providerData.some(
+      (provider) => provider.providerId === "google.com",
+    );
+
+    if (!isGoogleUser && !user.emailVerified) {
+      // TypeScript safety: user is not null here.
+      return <EmailVerificationMessage user={user} />;
+    }
+    // Show dashboard for verified users or Google users
+    return <Home user={user} onSignOut={handleSignOut} />;
+  }
+
+  // Show authentication forms for non-authenticated users
+  if (currentView === "signup") {
+    // Assuming SignUp component has onSwitchToSignIn prop
+    return <SignUp onSwitchToSignIn={handleSwitchToSignIn} />;
+  }
+
+  // Assuming SignIn component has onSwitchToSignUp prop
+  return <SignIn onSwitchToSignUp={handleSwitchToSignUp} />;
+};
 
 export default App;
-
