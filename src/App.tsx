@@ -337,7 +337,7 @@ function App() {
                 </div>
 
                <div className="p-4 bg-slate-700/50 border border-slate-600 rounded-lg">
-                  <h3 className="text-lg font-semibold mb-2">Model Transcription:</h3>
+                  <h3 className="text-lg font-semibold mb-2">Whisper Transcription:</h3>
                   <p className="text-blue-300 text-xl">{whisperText || "..."}</p>
                 </div>
 
