@@ -1,51 +1,68 @@
-const API_BASE_URL = 'http://127.0.0.1:5050';
+import { client } from "@gradio/client"; 
 
-export const transcribeAudio = async (audioFile: File): Promise<{ text: string }> => {
-  const formData = new FormData();
-  formData.append('file', audioFile);
+// --- CONFIGURATION ---
+const HF_SPACE_ID = 'sritej15/mini-wav2vec2-asr'; 
 
-  try {
-    const response = await fetch(`${API_BASE_URL}/transcribe`, {
-      method: 'POST',
-      body: formData,
-    });
+// 🚨 FINAL FIX: The API documentation confirms the correct identifier is '/predict'.
+const API_NAME = '/predict'; 
 
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+// The PROXY_ROOT_URL construction is now confirmed to be correct for absolute URL usage.
+const PROXY_HOST = import.meta.env.VITE_DEV_SERVER_HOST || 'http://localhost:5173';
+const PROXY_ROOT_URL = `${PROXY_HOST}/hf-proxy`; 
+
+export interface TranscriptionResult {
+    text: string;
+}
+
+/**
+ * Core utility to initialize the client and handle the prediction call.
+ */
+const transcribeAudioSource = async (
+    audioSource: File | Blob, 
+    fileName: string
+): Promise<TranscriptionResult> => {
+
+    try {
+        // 1. Initialize the client using the ABSOLUTE PROXY URL
+        const resolvedClient = await client(
+            PROXY_ROOT_URL, 
+            {} // Empty options object is required by TypeScript
+        ); 
+
+        // 2. Prepare the File object
+        const fileForClient = new File([audioSource], fileName, { 
+            type: audioSource.type || 'audio/webm' 
+        });
+
+        // 3. Call predict using the correct API_NAME
+        // Gradio client automatically handles file upload and replaces the input with a server-side path.
+        const response = await resolvedClient.predict(
+            API_NAME, // ⬅️ The correct API name
+            [fileForClient] // ⬅️ The single input parameter array
+        );
+        
+        // 4. Check the response structure
+        const responseData = response.data as unknown[];
+
+        if (responseData && typeof responseData[0] === 'string') {
+            return { text: responseData[0] };
+        } else {
+            throw new Error(`Invalid response format from ASR model: ${JSON.stringify(response.data)}`);
+        }
+
+    } catch (error) {
+        console.error('Final API Error (Using /predict):', error);
+        
+        throw new Error("Transcription failed due to a final communication error. Check your network tab for the server's response.");
     }
-
-    return await response.json();
-  } catch (error) {
-    console.error('Error transcribing audio file:', error);
-    // Mock response for development
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    return {
-      text: `Mock transcription for file: ${audioFile.name}. This is a sample transcription that would come from your backend ML model. The actual implementation will connect to your Speech-to-Text API endpoint.`
-    };
-  }
 };
 
-export const transcribeLiveAudio = async (audioBlob: Blob): Promise<{ text: string }> => {
-  const formData = new FormData();
-  formData.append('file', audioBlob);
+// --- EXPORTED FUNCTIONS (Unified API) ---
 
-  try {
-    const response = await fetch(`${API_BASE_URL}/transcribe`, {
-      method: 'POST',
-      body: formData,
-    });
+export const transcribeAudio = (audioFile: File): Promise<TranscriptionResult> => {
+    return transcribeAudioSource(audioFile, audioFile.name);
+};
 
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    return await response.json();
-  } catch (error) {
-    console.error('Error transcribing live audio:', error);
-    // Mock response for development
-    await new Promise(resolve => setTimeout(resolve, 3000));
-    return {
-      text: "Mock transcription from live recording. This is what your Speech-to-Text model would return after processing the recorded audio. The transcription accuracy will depend on your backend ML model implementation."
-    };
-  }
+export const transcribeLiveAudio = (audioBlob: Blob): Promise<TranscriptionResult> => {
+    return transcribeAudioSource(audioBlob, 'live_recording.webm');
 };
