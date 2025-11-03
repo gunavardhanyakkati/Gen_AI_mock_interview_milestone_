@@ -106,7 +106,7 @@ if (currentView === "video-webcam") {
           </div>
           <div className="bg-white rounded-xl shadow-lg p-6 hover:shadow-xl transition duration-300 transform hover:-translate-y-1 border border-teal-100">
             <div className="flex items-center gap-3 mb-4">
-              <Video className="w-10 h-10 text-red-500" />
+              <Video className="w-10 h-10 text-pink-700" />
               <Mic className="w-10 h-10 text-indigo-500" />
             </div>
 
@@ -119,7 +119,7 @@ if (currentView === "video-webcam") {
             </p>
             <button
               onClick={() => setCurrentView("video-webcam")}
-              className="w-full bg-red-600 text-white py-3 px-4 rounded-lg font-medium hover:bg-red-700 focus:outline-none focus:ring-4 focus:ring-teal-500 focus:ring-opacity-50 transition duration-150"
+              className="w-full bg-pink-800 text-white py-3 px-4 rounded-lg font-medium hover:bg-pink-900 focus:outline-none focus:ring-4 focus:ring-teal-500 focus:ring-opacity-50 transition duration-150"
             >
               Start Built-in Video Transcription
             </button>
