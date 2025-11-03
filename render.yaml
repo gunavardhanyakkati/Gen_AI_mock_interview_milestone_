@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: gen-ai-mock-interview
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn Wav2Vec2Bert:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0

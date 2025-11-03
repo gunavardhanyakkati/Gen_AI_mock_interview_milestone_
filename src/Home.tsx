@@ -2,9 +2,11 @@ import React, { useState } from "react";
 import { LogOut, Mic, Video } from "lucide-react";
 import AudioToText from './AudioToText'; // Assuming this is the path
 import VideoToText from "./VideoToText"; // Assuming this is the path
+import VideoToTextWebcam from "./VideoToTextWebcam";
+
 
 // Define a type for the current view state
-type View = "home" | "audio" | "video";
+type View = "home" | "audio" | "video" | "video-webcam";
 
 // Define the props for the Home component
 interface HomeProps {
@@ -27,8 +29,13 @@ const Home: React.FC<HomeProps> = ({ user, onSignOut }) => {
   }
 
   if (currentView === "video") {
-    return <VideoToText onBack={() => setCurrentView("home")} />;
-  }
+  return <VideoToText onBack={() => setCurrentView("home")} />;
+}
+
+if (currentView === "video-webcam") {
+  return <VideoToTextWebcam onBack={() => setCurrentView("home")} />;
+}
+
 
   // Render the main Home dashboard
   return (
@@ -97,6 +104,27 @@ const Home: React.FC<HomeProps> = ({ user, onSignOut }) => {
               Start Video Transcription
             </button>
           </div>
+          <div className="bg-white rounded-xl shadow-lg p-6 hover:shadow-xl transition duration-300 transform hover:-translate-y-1 border border-teal-100">
+            <div className="flex items-center gap-3 mb-4">
+              <Video className="w-10 h-10 text-red-500" />
+              <Mic className="w-10 h-10 text-indigo-500" />
+            </div>
+
+            <h3 className="text-xl font-semibold text-gray-900 mb-3">
+              (Video + Audio) to Text Transcription Built-In
+            </h3>
+            <p className="text-gray-600 mb-6">
+              Extract and transcribe dialogue from video files. Perfect for
+              creating subtitles, summaries, and searchable content.
+            </p>
+            <button
+              onClick={() => setCurrentView("video-webcam")}
+              className="w-full bg-red-600 text-white py-3 px-4 rounded-lg font-medium hover:bg-red-700 focus:outline-none focus:ring-4 focus:ring-teal-500 focus:ring-opacity-50 transition duration-150"
+            >
+              Start Built-in Video Transcription
+            </button>
+          </div>
+
         </div>
       </main>
       
