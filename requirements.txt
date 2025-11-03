@@ -1,0 +1,13 @@
+torch 
+torchvision 
+torchaudio 
+mediapipe 
+numpy 
+opencv-python 
+fastapi 
+uvicorn 
+pydantic 
+python-multipart 
+openai-whisper 
+tqdm   
+torchcodec   
