@@ -20,6 +20,12 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from tqdm import tqdm # Import tqdm for descriptive loop running
 
+FFMPEG_DLL_PATH = r'C:\ffmpeg\bin' 
+
+if os.name == 'nt' and os.path.isdir(FFMPEG_DLL_PATH):
+    # This ensures torchaudio/torchcodec finds the dynamic libraries
+    os.add_dll_directory(FFMPEG_DLL_PATH)
+
 # --- Configuration Constants ---
 # IMPORTANT: Set this to 'cpu' if you plan to deploy without a GPU,
 # as Whisper and PyTorch models can consume a lot of memory.
