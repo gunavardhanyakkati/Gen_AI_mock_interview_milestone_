@@ -38,8 +38,8 @@ You must have the following installed on your local machine to run the backend a
 
 1.  **Clone the repository:**
     ```bash
-    git clone [https://github.com/](https://github.com/)[Your_GitHub_Username]/[Your_Repo_Name].git
-    cd [Your_Repo_Name]
+    git clone https://github.com/gunavardhanyakkati/Gen_AI_mock_interview_milestone_.git
+    cd Gen_AI_mock_interview_milestone_
     ```
 2.  **Create and activate the virtual environment:**
     ```bash
@@ -93,8 +93,8 @@ You must have the following installed on your local machine to run the backend a
 | Resource | URL |
 | :--- | :--- |
 | **Source Code Repository** | https://github.com/gunavardhanyakkati/Gen_AI_mock_interview_milestone_ |
-| **Dataset Used (GRID)** | `https://spandh.dcs.shef.ac.uk/gridcorpus/`  |
-| **AV-HuBERT Reference** | `https://github.com/facebookresearch/av_hubert` |
+| **Dataset Used (GRID)** | https://spandh.dcs.shef.ac.uk/gridcorpus/  |
+| **AV-HuBERT Reference** | https://github.com/facebookresearch/av_hubert |
 | **Presentation/Project Summary** | https://docs.google.com/presentation/d/1MNv4g6Q2eN22RrohnCM78_fnFEOZIvLb/edit?usp=sharing&ouid=115753322327986944310&rtpof=true&sd=true |
 
 
