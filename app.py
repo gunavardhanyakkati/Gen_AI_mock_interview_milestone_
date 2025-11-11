@@ -19,6 +19,10 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from tqdm import tqdm # Import tqdm for descriptive loop running
+import mediapipe as mp
+import numpy as np
+import cv2
+from tqdm import tqdm
 
 # --- Configuration Constants ---
 # IMPORTANT: Set this to 'cpu' if you plan to deploy without a GPU,
@@ -196,132 +200,154 @@ def run_inference_on_word(word_video_frames: List[np.ndarray], word_audio_wavefo
         return "[ERROR]"
 
 
+# --- Define global lip landmark indices ---
+LIPS_IDX = [
+    61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 308,
+    324, 318, 402, 317, 14, 87, 178, 88, 95, 185, 40, 39,
+    37, 0, 267, 269, 270, 409, 415, 310, 311, 312, 13, 82,
+    81, 42, 183, 78
+]
+
+mp_face_mesh = mp.solutions.face_mesh
+
+
+def extract_lip_roi(frame, face_mesh, output_size=(96, 96)):
+    """
+    Extracts and returns a cropped lip region from a frame using MediaPipe FaceMesh.
+    Returns None if no face or lips detected.
+    """
+    h, w, _ = frame.shape
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    results = face_mesh.process(rgb_frame)
+
+    if not results.multi_face_landmarks:
+        return None
+
+    landmarks = results.multi_face_landmarks[0].landmark
+    lip_points = np.array([(int(landmarks[i].x * w), int(landmarks[i].y * h)) for i in LIPS_IDX])
+
+    x_min, y_min = np.min(lip_points, axis=0)
+    x_max, y_max = np.max(lip_points, axis=0)
+
+    margin = 10
+    x_min = max(0, x_min - margin)
+    y_min = max(0, y_min - margin)
+    x_max = min(w, x_max + margin)
+    y_max = min(h, y_max + margin)
+
+    lip_crop = frame[y_min:y_max, x_min:x_max]
+    if lip_crop.size == 0:
+        return None
+
+    lip_gray = cv2.cvtColor(cv2.resize(lip_crop, output_size, interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)
+    return lip_gray
+
+
 def predict_sentence_pipeline(video_path: Path) -> Tuple[str, str]:
     """
-    Runs the full A/V word-by-word prediction pipeline on a video file.
+    Full A/V prediction pipeline with FaceMesh-based lip ROI extraction.
     """
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video file not found at {video_path}")
         
-    # Use a secure temp file for audio extraction
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_audio_file:
         temp_audio_path = tmp_audio_file.name
-    
+
     try:
-        # --- Step 1: Extract Audio from Video (as 16kHz, Mono) ---
-        # Use subprocess.run for better control and error handling
+        # --- Step 1: Extract Audio ---
         ffmpeg_command = [
-            "ffmpeg", "-i", str(video_path), 
-            "-vn", "-acodec", "pcm_s16le", "-ar", str(TARGET_SR), 
+            "ffmpeg", "-i", str(video_path),
+            "-vn", "-acodec", "pcm_s16le", "-ar", str(TARGET_SR),
             "-ac", "1", temp_audio_path, "-y", "-hide_banner", "-loglevel", "error"
         ]
-        
-        result = subprocess.run(ffmpeg_command, check=False, 
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        
-        if result.returncode != 0:
-            raise RuntimeError("FFmpeg failed to extract audio. Check logs and FFmpeg installation.")
-        
-        if not os.path.exists(temp_audio_path):
-            raise RuntimeError("FFmpeg failed to create audio file.")
+        result = subprocess.run(ffmpeg_command, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if result.returncode != 0 or not os.path.exists(temp_audio_path):
+            raise RuntimeError("FFmpeg failed to extract audio.")
 
-        # --- Step 2: Run Whisper for Word-Level Timestamps ---
-        # The whisper model is loaded globally
+        # --- Step 2: Whisper Transcription ---
         if whisper_model is None:
-                raise RuntimeError("Whisper model failed to load at startup.")
-
-        result = whisper_model.transcribe(
-            temp_audio_path, 
-            language="en", 
-            word_timestamps=True,
-            # Use small or base model for faster inference on CPU
-            # Depending on the speed requirement, you may need a faster device
-            # or a smaller model.
-            # model_name="base" 
-        )
-        
-        # --- Step 3: Collect all word segments ---
+            raise RuntimeError("Whisper model not loaded.")
+        result = whisper_model.transcribe(temp_audio_path, language="en", word_timestamps=True)
+        whisper_transcription = result.get("text", "")
         all_word_segments = []
         if "segments" in result:
-            for segment in result["segments"]:
-                if "words" in segment:
-                    all_word_segments.extend(segment["words"])
-        
-        # Debugging print statement
-        print("WHISPER FOUND WORDS:", all_word_segments)
-        whisper_transcription = result.get("text", "")
-        
+            for seg in result["segments"]:
+                if "words" in seg:
+                    all_word_segments.extend(seg["words"])
+
         if not all_word_segments:
             return "Prediction failed: No words found.", whisper_transcription
 
-        # --- Step 4: Load Video & Full Audio into Memory ---
+        # --- Step 3: Load Video Frames ---
         cap = cv2.VideoCapture(str(video_path))
         fps = cap.get(cv2.CAP_PROP_FPS)
-        all_frames = []
+        frames = []
         while True:
             ret, frame = cap.read()
-            if not ret: break
-            all_frames.append(frame)
+            if not ret:
+                break
+            frames.append(frame)
         cap.release()
 
-        # Check if video loaded correctly
-        if not all_frames:
-             return "Prediction failed: Could not load video frames.", whisper_transcription
+        if not frames:
+            return "Prediction failed: Could not load frames.", whisper_transcription
 
-        full_waveform, sr = torchaudio.load(temp_audio_path)
-        
-        # --- Step 5: Loop Through Words and Predict One-by-One ---
+        # --- Step 4: Load Audio ---
+        waveform, sr = torchaudio.load(temp_audio_path)
+
+        # --- Step 5: Setup FaceMesh ---
+        face_mesh = mp_face_mesh.FaceMesh(
+            static_image_mode=False,
+            max_num_faces=1,
+            refine_landmarks=True,
+            min_detection_confidence=0.5
+        )
+
+        # --- Step 6: Predict Each Word ---
         predicted_sentence = []
-        
-        for word_data in all_word_segments:
-            
-            # ==================================================================
-            # === FIX 2: Convert np.float64 to standard Python float ===
-            # ==================================================================
+        for word_data in tqdm(all_word_segments, desc="Predicting words"):
             start_time = float(word_data['start'])
             end_time = float(word_data['end'])
-            
-            # 1. Get Video Clip Frames
+
             start_frame = int(start_time * fps)
             end_frame = int(end_time * fps)
-            
-            # Ensure indices are within bounds
             start_frame = max(0, start_frame)
-            end_frame = min(len(all_frames), end_frame)
+            end_frame = min(len(frames), end_frame)
 
-            # Check for empty frame lists *before* processing
             if start_frame >= end_frame:
-                print(f"Skipping word '{word_data['word']}': No frames found between {start_frame} and {end_frame}.")
-                continue # Skip to the next word
-            
-            # Resize BGR frames to Grayscale (H, W) for input
-            word_video_frames_bgr = all_frames[start_frame : end_frame]
-            
-            word_video_frames_gray = [
-                cv2.cvtColor(cv2.resize(f, (96, 96), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY) 
-                for f in word_video_frames_bgr
-            ]
-            
-            # 2. Get Audio Clip Waveform
+                continue
+
+            word_video_frames_bgr = frames[start_frame:end_frame]
+
+            # 🟣 NEW: Extract Lip Crops per frame using FaceMesh
+            lip_crops = []
+            for f in word_video_frames_bgr:
+                roi = extract_lip_roi(f, face_mesh)
+                if roi is not None:
+                    lip_crops.append(roi)
+            if not lip_crops:
+                print(f"Skipping word '{word_data['word']}' — no lips detected.")
+                continue
+
+            # 🟡 Audio Clip
             start_sample = int(start_time * sr)
             end_sample = int(end_time * sr)
-            word_audio_waveform = full_waveform[:, start_sample:end_sample]
-            
-            # 3. Run our A/V Model
-            predicted_word = run_inference_on_word(
-                word_video_frames_gray, word_audio_waveform
-            )
-            
+            word_audio_waveform = waveform[:, start_sample:end_sample]
+
+            # 🧠 Model Inference
+            predicted_word = run_inference_on_word(lip_crops, word_audio_waveform)
             if predicted_word:
                 predicted_sentence.append(predicted_word)
-        
+
+        face_mesh.close()
+
         final_output = " ".join(predicted_sentence)
         return final_output, whisper_transcription
-        
+
     finally:
-        # --- Step 6: Clean up temporary audio file ---
         if os.path.exists(temp_audio_path):
             os.remove(temp_audio_path)
+
 
 
 # ==============================================================================
